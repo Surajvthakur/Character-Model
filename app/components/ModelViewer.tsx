@@ -4,7 +4,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Stage } from '@react-three/drei';
 import { Suspense, useState, useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
-
+import { Mesh } from 'three';
 // WebGL Context Loss Handler
 function ContextLossHandler() {
   const { gl } = useThree();
@@ -47,7 +47,7 @@ function Model() {
   // To handle errors, we should wrap the parent in an ErrorBoundary or use a try-catch pattern if possible,
   // but useGLTF is a hook that throws if it fails.
   const { scene } = useGLTF('/models/columbina_rigged_free.glb');
-  const meshRef = useRef();
+  const meshRef = useRef<Mesh>(null);
 
   useEffect(() => {
     if (scene) {
@@ -78,48 +78,6 @@ function Loader() {
   );
 }
 
-// Error fallback component
-function ErrorFallback({ error }: { error: Error }) {
-  return (
-    <div className="flex items-center justify-center h-full bg-red-50 p-4 rounded-lg">
-      <div className="text-center">
-        <div className="text-red-600 text-lg font-bold mb-2">Model Load Error</div>
-        <div className="text-sm text-gray-700 bg-white p-3 border border-red-200 rounded overflow-auto max-w-md">
-          {error.message}
-        </div>
-        <button 
-          onClick={() => window.location.reload()}
-          className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Simple Error Boundary
-class ErrorBoundary extends (require('react').Component) {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error, errorInfo) {
-    console.error("ErrorBoundary caught an error", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return <ErrorFallback error={this.state.error} />;
-    }
-    return this.props.children;
-  }
-}
 
 // Main 3D viewer component
 export default function ModelViewer() {
@@ -145,32 +103,30 @@ export default function ModelViewer() {
 
   return (
     <div className="w-full h-full relative">
-      <ErrorBoundary>
-        <Suspense fallback={<Loader />}>
-          <Canvas
-            shadows
-            camera={{ position: [0, 0, 5], fov: 50 }}
-            dpr={dpr}
-            gl={{ 
-              antialias: true,
-              alpha: true,
-              powerPreference: "high-performance"
-            }}
-            onError={(error) => {
-              console.error('Canvas error:', error);
-              setWebGLError(true);
-            }}
-          >
-            <ContextLossHandler />
-            <Suspense fallback={null}>
-              <Stage intensity={0.5} environment="city" adjustCamera={true}>
-                <Model />
-              </Stage>
-            </Suspense>
-            <OrbitControls makeDefault />
-          </Canvas>
-        </Suspense>
-      </ErrorBoundary>
+      <Suspense fallback={<Loader />}>
+        <Canvas
+          shadows
+          camera={{ position: [0, 0, 5], fov: 50 }}
+          dpr={dpr}
+          gl={{
+            antialias: true,
+            alpha: true,
+            powerPreference: "high-performance"
+          }}
+          onError={(error) => {
+            console.error('Canvas error:', error);
+            setWebGLError(true);
+          }}
+        >
+          <ContextLossHandler />
+          <Suspense fallback={null}>
+            <Stage intensity={0.5} environment="city" adjustCamera={true}>
+              <Model />
+            </Stage>
+          </Suspense>
+          <OrbitControls makeDefault />
+        </Canvas>
+      </Suspense>
     </div>
   );
 }
