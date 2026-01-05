@@ -2,9 +2,9 @@
 
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Stage } from '@react-three/drei';
-import { Suspense, useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useThree } from '@react-three/fiber';
-import { Mesh } from 'three';
+import { Bone, MathUtils, Mesh } from 'three';
 // WebGL Context Loss Handler
 function ContextLossHandler() {
   const { gl } = useThree();
@@ -41,26 +41,96 @@ function ContextLossHandler() {
   ) : null;
 }
 
-// Component to load and display the GLB model
-function Model() {
+type BoneTransform = {
+  rotation: [number, number, number]; // degrees offset from bind pose
+  position: [number, number, number]; // units offset from bind pose
+};
+
+type ModelProps = {
+  onBonesReady?: (boneNames: string[]) => void;
+  boneTransforms: Record<string, BoneTransform>;
+};
+
+function Model({ onBonesReady, boneTransforms }: ModelProps) {
   const { scene } = useGLTF('/models/columbina_rigged_free.glb');
+  const bonesRef = useRef<Record<string, Bone>>({});
+  const bindPoseRef = useRef<
+    Record<
+      string,
+      {
+        rotation: { x: number; y: number; z: number };
+        position: { x: number; y: number; z: number };
+      }
+    >
+  >({});
 
   useEffect(() => {
     if (scene) {
+      const foundBones: Record<string, Bone> = {};
       scene.traverse((child) => {
         if (child instanceof Mesh) {
           // Force vertex colors off to see if the texture appears
-          child.geometry.deleteAttribute('color'); 
-          
+          child.geometry.deleteAttribute('color');
+
           // Ensure the material isn't completely metallic/rough
           if (child.material) {
             child.material.metalness = 0;
             child.material.roughness = 1;
           }
         }
+
+        if ((child as Bone).isBone) {
+          const bone = child as Bone;
+          foundBones[bone.name] = bone;
+
+          if (!bindPoseRef.current[bone.name]) {
+            bindPoseRef.current[bone.name] = {
+              rotation: {
+                x: bone.rotation.x,
+                y: bone.rotation.y,
+                z: bone.rotation.z,
+              },
+              position: {
+                x: bone.position.x,
+                y: bone.position.y,
+                z: bone.position.z,
+              },
+            };
+          }
+        }
       });
+
+      bonesRef.current = foundBones;
+      onBonesReady?.(Object.keys(foundBones).sort());
     }
-  }, [scene]);
+  }, [scene, onBonesReady]);
+
+  useEffect(() => {
+    Object.entries(boneTransforms).forEach(([name, transform]) => {
+      const bone = bonesRef.current[name];
+      if (!bone) return;
+
+      const bindPose = bindPoseRef.current[name];
+      const [rx, ry, rz] = transform.rotation;
+      const [px, py, pz] = transform.position;
+
+      const baseRotX = bindPose?.rotation.x ?? bone.rotation.x;
+      const baseRotY = bindPose?.rotation.y ?? bone.rotation.y;
+      const baseRotZ = bindPose?.rotation.z ?? bone.rotation.z;
+
+      const basePosX = bindPose?.position.x ?? bone.position.x;
+      const basePosY = bindPose?.position.y ?? bone.position.y;
+      const basePosZ = bindPose?.position.z ?? bone.position.z;
+
+      bone.rotation.set(
+        baseRotX + MathUtils.degToRad(rx),
+        baseRotY + MathUtils.degToRad(ry),
+        baseRotZ + MathUtils.degToRad(rz)
+      );
+      bone.position.set(basePosX + px, basePosY + py, basePosZ + pz);
+      bone.updateMatrixWorld();
+    });
+  }, [boneTransforms]);
 
   return <primitive object={scene} />;
 }
@@ -75,15 +145,201 @@ function Loader() {
 }
 
 
+type BoneControlsProps = {
+  bones: string[];
+  selectedBone: string;
+  transforms: Record<string, BoneTransform>;
+  onSelectBone: (bone: string) => void;
+  onChange: (
+    bone: string,
+    type: 'rotation' | 'position',
+    axisIndex: number,
+    value: number
+  ) => void;
+  onResetBone: (bone: string) => void;
+  onResetAll: () => void;
+};
+
+function BoneControls({
+  bones,
+  selectedBone,
+  transforms,
+  onSelectBone,
+  onChange,
+  onResetBone,
+  onResetAll,
+}: BoneControlsProps) {
+  const current = transforms[selectedBone];
+
+  return (
+    <div className="absolute top-4 left-4 z-10 w-80 rounded-lg bg-white/90 p-4 text-gray-900 shadow-lg backdrop-blur-sm space-y-3">
+      <div className="text-sm font-semibold">Bone Pose Controls</div>
+
+      <div className="space-y-1">
+        <label className="text-xs font-medium text-gray-600">Bone</label>
+        <select
+          className="w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-sm"
+          value={selectedBone}
+          onChange={(e) => onSelectBone(e.target.value)}
+        >
+          {bones.length === 0 && <option value="">Loading bones...</option>}
+          {bones.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {current ? (
+        <>
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-gray-700">
+              Rotation (degrees)
+            </div>
+            {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
+              <div key={`rot-${axis}`} className="flex items-center gap-2">
+                <span className="w-10 text-xs text-gray-600">Rot {axis}</span>
+                <input
+                  type="range"
+                  min={-90}
+                  max={90}
+                  step={1}
+                  className="flex-1"
+                  value={current.rotation[idx]}
+                  onChange={(e) =>
+                    onChange(selectedBone, 'rotation', idx, Number(e.target.value))
+                  }
+                />
+                <span className="w-10 text-right text-xs text-gray-700">
+                  {current.rotation[idx]}°
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-gray-700">
+              Position (offset)
+            </div>
+            {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
+              <div key={`pos-${axis}`} className="flex items-center gap-2">
+                <span className="w-10 text-xs text-gray-600">Pos {axis}</span>
+                <input
+                  type="range"
+                  min={-0.2}
+                  max={0.2}
+                  step={0.005}
+                  className="flex-1"
+                  value={current.position[idx]}
+                  onChange={(e) =>
+                    onChange(
+                      selectedBone,
+                      'position',
+                      idx,
+                      Number(e.target.value)
+                    )
+                  }
+                />
+                <span className="w-12 text-right text-xs text-gray-700">
+                  {current.position[idx].toFixed(3)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              className="flex-1 rounded-md bg-gray-900 px-2 py-1 text-xs font-semibold text-white hover:bg-gray-800"
+              onClick={() => onResetBone(selectedBone)}
+              type="button"
+            >
+              Reset bone
+            </button>
+            <button
+              className="flex-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-semibold text-gray-800 hover:bg-gray-100"
+              onClick={onResetAll}
+              type="button"
+            >
+              Reset all
+            </button>
+          </div>
+
+          <p className="text-[11px] text-gray-600">
+            Offsets are applied on top of the rig&apos;s bind pose. Use small
+            increments to pose the model.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-gray-600">Select a bone to start posing.</p>
+      )}
+    </div>
+  );
+}
+
 // Main 3D viewer component
 export default function ModelViewer() {
   const [webGLError, setWebGLError] = useState(false);
   const [dpr, setDpr] = useState(1);
+  const [boneTransforms, setBoneTransforms] = useState<Record<string, BoneTransform>>({});
+  const [bones, setBones] = useState<string[]>([]);
+  const [selectedBone, setSelectedBone] = useState<string>('');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setDpr(Math.min(window.devicePixelRatio, 2));
     }
+  }, []);
+
+  const handleBonesReady = useCallback((boneNames: string[]) => {
+    setBones(boneNames);
+    setSelectedBone((prev) => prev || boneNames[0] || '');
+    setBoneTransforms((prev) => {
+      const next = { ...prev };
+      boneNames.forEach((name) => {
+        if (!next[name]) {
+          next[name] = { rotation: [0, 0, 0], position: [0, 0, 0] };
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const updateTransform = useCallback(
+    (
+      bone: string,
+      type: 'rotation' | 'position',
+      axisIndex: number,
+      value: number
+    ) => {
+      setBoneTransforms((prev) => {
+        const current = prev[bone] ?? { rotation: [0, 0, 0], position: [0, 0, 0] };
+        const next: BoneTransform = {
+          rotation: [...current.rotation] as [number, number, number],
+          position: [...current.position] as [number, number, number],
+        };
+        next[type][axisIndex] = value;
+        return { ...prev, [bone]: next };
+      });
+    },
+    []
+  );
+
+  const resetBone = useCallback((bone: string) => {
+    setBoneTransforms((prev) => ({
+      ...prev,
+      [bone]: { rotation: [0, 0, 0], position: [0, 0, 0] },
+    }));
+  }, []);
+
+  const resetAllBones = useCallback(() => {
+    setBoneTransforms((prev) => {
+      const next: Record<string, BoneTransform> = {};
+      Object.keys(prev).forEach((bone) => {
+        next[bone] = { rotation: [0, 0, 0], position: [0, 0, 0] };
+      });
+      return next;
+    });
   }, []);
 
   if (webGLError) {
@@ -99,6 +355,15 @@ export default function ModelViewer() {
 
   return (
     <div className="w-full h-full relative">
+      <BoneControls
+        bones={bones}
+        selectedBone={selectedBone}
+        transforms={boneTransforms}
+        onSelectBone={setSelectedBone}
+        onChange={updateTransform}
+        onResetBone={resetBone}
+        onResetAll={resetAllBones}
+      />
       <Suspense fallback={<Loader />}>
         <Canvas
           flat
@@ -122,8 +387,16 @@ export default function ModelViewer() {
           <directionalLight position={[5, 5, 5]} intensity={1} />
           <ContextLossHandler />
           <Suspense fallback={null}>
-            <Stage intensity={0.5} environment="city" adjustCamera={true}>
-              <Model />
+            <Stage
+              intensity={0.5}
+              environment="city"
+              // Prevent Stage from re-framing the camera when the model/bones change
+              adjustCamera={false}
+            >
+              <Model
+                boneTransforms={boneTransforms}
+                onBonesReady={handleBonesReady}
+              />
             </Stage>
           </Suspense>
           <OrbitControls makeDefault />
@@ -133,3 +406,4 @@ export default function ModelViewer() {
   );
 }
 
+useGLTF.preload('/models/columbina_rigged_free.glb');
