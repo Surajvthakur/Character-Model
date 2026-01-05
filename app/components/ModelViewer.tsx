@@ -43,30 +43,26 @@ function ContextLossHandler() {
 
 // Component to load and display the GLB model
 function Model() {
-  // useGLTF returns the GLTF result directly, not an object with {scene, error}
-  // To handle errors, we should wrap the parent in an ErrorBoundary or use a try-catch pattern if possible,
-  // but useGLTF is a hook that throws if it fails.
   const { scene } = useGLTF('/models/columbina_rigged_free.glb');
-  const meshRef = useRef<Mesh>(null);
 
   useEffect(() => {
     if (scene) {
-      console.log('GLTF loaded successfully:', scene);
+      scene.traverse((child) => {
+        if (child instanceof Mesh) {
+          // Force vertex colors off to see if the texture appears
+          child.geometry.deleteAttribute('color'); 
+          
+          // Ensure the material isn't completely metallic/rough
+          if (child.material) {
+            child.material.metalness = 0;
+            child.material.roughness = 1;
+          }
+        }
+      });
     }
   }, [scene]);
 
-  if (!scene) {
-    return null;
-  }
-
-  return (
-    <primitive 
-      ref={meshRef}
-      object={scene} 
-      scale={1} 
-      position={[0, 0, 0]} 
-    />
-  );
+  return <primitive object={scene} />;
 }
 
 // Loading fallback component
@@ -105,19 +101,25 @@ export default function ModelViewer() {
     <div className="w-full h-full relative">
       <Suspense fallback={<Loader />}>
         <Canvas
+          flat
           shadows
           camera={{ position: [0, 0, 5], fov: 50 }}
           dpr={dpr}
           gl={{
             antialias: true,
             alpha: true,
-            powerPreference: "high-performance"
+            powerPreference: "high-performance",
+            // Use ACESFilmicToneMapping from three.js via r3f's gl prop
+            toneMapping: 7, // ACESFilmicToneMapping (Numeric value; see three/src/constants.js)
+            toneMappingExposure: 0.15 // adjust this down (0.5) if it's still too bright
           }}
           onError={(error) => {
             console.error('Canvas error:', error);
             setWebGLError(true);
           }}
         >
+          <ambientLight intensity={0.8} />
+          <directionalLight position={[5, 5, 5]} intensity={1} />
           <ContextLossHandler />
           <Suspense fallback={null}>
             <Stage intensity={0.5} environment="city" adjustCamera={true}>
