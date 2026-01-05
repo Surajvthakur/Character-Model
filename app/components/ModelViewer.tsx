@@ -111,7 +111,7 @@ export default function ModelViewer() {
             powerPreference: "high-performance",
             // Use ACESFilmicToneMapping from three.js via r3f's gl prop
             toneMapping: 7, // ACESFilmicToneMapping (Numeric value; see three/src/constants.js)
-            toneMappingExposure: 0.15 // adjust this down (0.5) if it's still too bright
+            toneMappingExposure: 0.1 // adjust this down (0.5) if it's still too bright
           }}
           onError={(error) => {
             console.error('Canvas error:', error);
