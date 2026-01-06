@@ -4,7 +4,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Stage } from '@react-three/drei';
 import { Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { useThree } from '@react-three/fiber';
-import { Bone, MathUtils, Mesh } from 'three';
+import { Bone, Box3, MathUtils, Mesh, Sphere, Vector3 } from 'three';
 // WebGL Context Loss Handler
 function ContextLossHandler() {
   const { gl } = useThree();
@@ -46,14 +46,21 @@ type BoneTransform = {
   position: [number, number, number]; // units offset from bind pose
 };
 
+type SceneBounds = {
+  center: [number, number, number];
+  radius: number;
+};
+
 type ModelProps = {
   onBonesReady?: (boneNames: string[]) => void;
   boneTransforms: Record<string, BoneTransform>;
+  onSceneBoundsReady?: (data: SceneBounds) => void;
 };
 
-function Model({ onBonesReady, boneTransforms }: ModelProps) {
+function Model({ onBonesReady, boneTransforms, onSceneBoundsReady }: ModelProps) {
   const { scene } = useGLTF('/models/columbina_rigged_free.glb');
   const bonesRef = useRef<Record<string, Bone>>({});
+  const boundsSentRef = useRef(false);
   const bindPoseRef = useRef<
     Record<
       string,
@@ -102,8 +109,21 @@ function Model({ onBonesReady, boneTransforms }: ModelProps) {
 
       bonesRef.current = foundBones;
       onBonesReady?.(Object.keys(foundBones).sort());
+
+      if (!boundsSentRef.current) {
+        const box = new Box3().setFromObject(scene);
+        const sphere = new Sphere();
+        box.getBoundingSphere(sphere);
+        if (sphere.radius > 0 && onSceneBoundsReady) {
+          boundsSentRef.current = true;
+          onSceneBoundsReady({
+            center: [sphere.center.x, sphere.center.y, sphere.center.z],
+            radius: sphere.radius,
+          });
+        }
+      }
     }
-  }, [scene, onBonesReady]);
+  }, [scene, onBonesReady, onSceneBoundsReady]);
 
   useEffect(() => {
     Object.entries(boneTransforms).forEach(([name, transform]) => {
@@ -277,6 +297,37 @@ function BoneControls({
   );
 }
 
+function CameraFit({ bounds }: { bounds?: SceneBounds }) {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls as any);
+  const appliedRef = useRef(false);
+
+  useEffect(() => {
+    if (!bounds || appliedRef.current) return;
+
+    const radius = Math.max(bounds.radius, 0.02);
+    const centerVec = new Vector3(...bounds.center);
+    const distance = Math.max(radius * 1, 0.05);
+    const offset = new Vector3(radius * 0.2, radius * 0.6, distance);
+
+    camera.position.copy(centerVec.clone().add(offset));
+    camera.near = Math.max(radius * 0.02, 0.005);
+    camera.far = Math.max(distance * 40, 100);
+    camera.updateProjectionMatrix();
+
+    if (controls?.target) {
+      controls.target.copy(centerVec);
+      controls.minDistance = Math.max(radius * 0.05, 0.01);
+      controls.maxDistance = Math.max(distance * 6, radius * 30);
+      controls.update();
+    }
+
+    appliedRef.current = true;
+  }, [bounds, camera, controls]);
+
+  return null;
+}
+
 // Main 3D viewer component
 export default function ModelViewer() {
   const [webGLError, setWebGLError] = useState(false);
@@ -284,6 +335,7 @@ export default function ModelViewer() {
   const [boneTransforms, setBoneTransforms] = useState<Record<string, BoneTransform>>({});
   const [bones, setBones] = useState<string[]>([]);
   const [selectedBone, setSelectedBone] = useState<string>('');
+  const [sceneBounds, setSceneBounds] = useState<SceneBounds | undefined>(undefined);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -303,6 +355,10 @@ export default function ModelViewer() {
       });
       return next;
     });
+  }, []);
+
+  const handleSceneBoundsReady = useCallback((data: SceneBounds) => {
+    setSceneBounds(data);
   }, []);
 
   const updateTransform = useCallback(
@@ -396,9 +452,11 @@ export default function ModelViewer() {
               <Model
                 boneTransforms={boneTransforms}
                 onBonesReady={handleBonesReady}
+              onSceneBoundsReady={handleSceneBoundsReady}
               />
             </Stage>
           </Suspense>
+          <CameraFit bounds={sceneBounds} />
           <OrbitControls makeDefault />
         </Canvas>
       </Suspense>
